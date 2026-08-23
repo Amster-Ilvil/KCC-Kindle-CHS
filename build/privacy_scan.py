@@ -16,6 +16,10 @@ TEXT_SUFFIXES = {
 }
 SELF = Path(__file__).resolve()
 _PERSONAL_OWNER = "amster" + "-" + "ilvil"
+# LICENSE is intentionally public attribution. Keep scanning it for secrets,
+# tokens and local machine paths, but do not treat its copyright names/e-mails
+# as accidental private-data leakage.
+PUBLIC_ATTRIBUTION_FILES = {"LICENSE"}
 
 PATTERNS = [
     ("macOS 本机用户路径", re.compile(r"/Users/(?!runner(?:/|$))[^/\s'\"]+", re.I)),
@@ -55,14 +59,22 @@ def main() -> int:
         except (UnicodeDecodeError, OSError):
             continue
         rel = path.relative_to(ROOT)
+        is_public_attribution = rel.as_posix() in PUBLIC_ATTRIBUTION_FILES
         lines = text.splitlines()
         for label, pattern in PATTERNS:
+            # A copyright/license attribution is intentional public metadata;
+            # all high-risk patterns above (paths, keys, tokens, credentials)
+            # are still evaluated normally.
+            if is_public_attribution and label == "个人 GitHub 标识":
+                continue
             for match in pattern.finditer(text):
                 line = text.count("\n", 0, match.start()) + 1
                 line_text = lines[line - 1] if 0 < line <= len(lines) else ""
                 if label == "个人 GitHub 标识" and "grep -qi" in line_text and "PLIST" in line_text:
                     continue
                 findings.append(f"{rel}:{line}: {label}: {match.group(0)[:120]}")
+        if is_public_attribution:
+            continue
         for match in EMAIL_RE.finditer(text):
             email = match.group(1)
             domain = email.rsplit("@", 1)[-1].lower()
