@@ -1,0 +1,64 @@
+name: Temporary RD15 Offline Assets
+on:
+  push:
+    branches:
+      - tmp-rd15-assets-20260824
+    paths-ignore:
+      - .rd15-assets-run.txt
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record run id
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' '${{ github.run_id }}' > .rd15-assets-run.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .rd15-assets-run.txt
+          git commit -m 'ci: record temporary RD15 run [skip ci]'
+          git push origin HEAD:${GITHUB_REF_NAME}
+      - name: Fetch and verify pinned assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out work/ss
+          cd work
+          curl --fail --location --retry 5 --retry-all-errors -o v2ray.zip 'https://github.com/v2fly/v2ray-core/releases/download/v5.52.0/v2ray-linux-arm32-v7a.zip'
+          echo '569e84b2ec3a461da30329dbbd46311bdeb0da0079a85552d819877850552fe5  v2ray.zip' | sha256sum -c -
+          unzip -q v2ray.zip -d v2
+          file v2/v2ray | tee ../out/V2RAY-ELF.txt
+          readelf -h v2/v2ray | tee -a ../out/V2RAY-ELF.txt
+          grep -q 'ELF 32-bit' ../out/V2RAY-ELF.txt
+          grep -q 'ARM' ../out/V2RAY-ELF.txt
+          gzip -9 -n -c v2/v2ray > ../out/v2ray.gz
+          BASE='https://downloads.openwrt.org/releases/21.02.2/packages/arm_cortex-a7_neon-vfpv4/packages'
+          fetch_ipk() { n="$1"; s="$2"; curl --fail --location --retry 5 --retry-all-errors -o "ss/$n" "$BASE/$n"; echo "$s  ss/$n" | sha256sum -c -; cp "ss/$n" ../out/; }
+          fetch_ipk 'shadowsocks-libev-config_3.3.5-1_arm_cortex-a7_neon-vfpv4.ipk' 'c730a2a46fde9773a7a60d0b7f5c15b90d79987fc1504b715d4a04dcf5f9c83a'
+          fetch_ipk 'shadowsocks-libev-ss-local_3.3.5-1_arm_cortex-a7_neon-vfpv4.ipk' 'ff0fbb2ac21e8d68924d21a953a6210abc168fac503e54c8185919666b7ecf14'
+          fetch_ipk 'shadowsocks-libev-ss-redir_3.3.5-1_arm_cortex-a7_neon-vfpv4.ipk' '56fb6414695d82af5f718a485b720c250eec8f6a77d93cc4356217bf47b430e3'
+          fetch_ipk 'shadowsocks-libev-ss-server_3.3.5-1_arm_cortex-a7_neon-vfpv4.ipk' '4ed79e34980fdef7e3d26326888cbefbad9637cbb0aaa0e3e0b222064cb83ddb'
+          cd ../out
+          for f in shadowsocks-libev-ss-*.ipk; do
+            d="inspect-${f%.ipk}"; mkdir -p "$d"; (cd "$d" && ar x "../$f" && tar -xf data.tar.*)
+            for b in "$d"/usr/bin/ss-*; do [ -f "$b" ] || continue; file "$b" | tee -a SS-ELF.txt; readelf -h "$b" | grep -E 'Class:|Machine:' | tee -a SS-ELF.txt; readelf -d "$b" 2>/dev/null | grep NEEDED | tee -a SS-ELF.txt || true; done
+          done
+          grep -q 'ELF 32-bit' SS-ELF.txt
+          grep -q 'ARM' SS-ELF.txt
+          rm -rf inspect-*
+          sha256sum v2ray.gz shadowsocks-libev-*.ipk > ASSETS.READY
+          printf '%s\n' 'V2Ray v5.52.0 official linux arm32-v7a; release ZIP SHA256 569e84b2ec3a461da30329dbbd46311bdeb0da0079a85552d819877850552fe5' 'Shadowsocks-libev 3.3.5-1 from official OpenWrt 21.02.2 arm_cortex-a7_neon-vfpv4 repository; each IPK pinned by SHA256.' > PROVENANCE.txt
+      - name: Upload verified offline assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: rd15-offline-assets
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
