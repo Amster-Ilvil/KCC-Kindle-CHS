@@ -46,9 +46,38 @@ jobs:
           fetch_ipk 'shadowsocks-libev-ss-redir_3.3.5-1_arm_cortex-a7_neon-vfpv4.ipk' '56fb6414695d82af5f718a485b720c250eec8f6a77d93cc4356217bf47b430e3'
           fetch_ipk 'shadowsocks-libev-ss-server_3.3.5-1_arm_cortex-a7_neon-vfpv4.ipk' '4ed79e34980fdef7e3d26326888cbefbad9637cbb0aaa0e3e0b222064cb83ddb'
           cd ../out
+          : > SS-ELF.txt
+          unpack_ipk() {
+            local f="$1" d="$2" data=''
+            mkdir -p "$d/pkg" "$d/root"
+            if ar t "$f" >/dev/null 2>&1; then
+              (cd "$d/pkg" && ar x "../../$f")
+            else
+              tar -xzf "$f" -C "$d/pkg"
+            fi
+            for cand in "$d/pkg"/data.tar.gz "$d/pkg"/data.tar.xz "$d/pkg"/data.tar.zst "$d/pkg"/data.tar; do
+              [ -f "$cand" ] && data="$cand" && break
+            done
+            [ -n "$data" ] || { echo "No data.tar payload in $f" >&2; find "$d/pkg" -maxdepth 1 -type f -printf '%f\n' >&2; exit 1; }
+            case "$data" in
+              *.gz) tar -xzf "$data" -C "$d/root" ;;
+              *.xz) tar -xJf "$data" -C "$d/root" ;;
+              *.zst) tar --zstd -xf "$data" -C "$d/root" ;;
+              *) tar -xf "$data" -C "$d/root" ;;
+            esac
+          }
           for f in shadowsocks-libev-ss-*.ipk; do
-            d="inspect-${f%.ipk}"; mkdir -p "$d"; (cd "$d" && ar x "../$f" && tar -xf data.tar.*)
-            for b in "$d"/usr/bin/ss-*; do [ -f "$b" ] || continue; file "$b" | tee -a SS-ELF.txt; readelf -h "$b" | grep -E 'Class:|Machine:' | tee -a SS-ELF.txt; readelf -d "$b" 2>/dev/null | grep NEEDED | tee -a SS-ELF.txt || true; done
+            d="inspect-${f%.ipk}"
+            unpack_ipk "$f" "$d"
+            found=0
+            for b in "$d"/root/usr/bin/ss-*; do
+              [ -f "$b" ] || continue
+              found=1
+              file "$b" | tee -a SS-ELF.txt
+              readelf -h "$b" | grep -E 'Class:|Machine:|Flags:' | tee -a SS-ELF.txt
+              readelf -d "$b" 2>/dev/null | grep NEEDED | tee -a SS-ELF.txt || true
+            done
+            [ "$found" -eq 1 ] || { echo "No ss-* binary in $f" >&2; exit 1; }
           done
           grep -q 'ELF 32-bit' SS-ELF.txt
           grep -q 'ARM' SS-ELF.txt
